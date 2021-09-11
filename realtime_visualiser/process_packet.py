@@ -25,6 +25,9 @@ class ProcessPacket:
         self.set_pps(flow_key, packet)
         if (packet.haslayer(UDP)):
             self.set_jitter(flow_key, packet)
+            self.set_packet_loss(flow_key, packet)
+
+        
 
     def post_process(self):
         return
@@ -63,8 +66,10 @@ class ProcessPacket:
             self.flows[self.flow_key] = info
             loss = {
                 'count': 0,
-                'expectedSeq': 0,
+                'expectedSeq': -1,
                 'total': 0,
+                'percentage': 0,
+                
             }
             len_obj = {
                 'arr': [],
@@ -142,14 +147,40 @@ class ProcessPacket:
     def set_packet_loss(self, key, packet):
         seq = self.get_seq(packet)
         loss = self.data[key]['loss']
+        loss['total'] += 1
+
+        if (seq == -1):
+            return
+
+ 
+        if (loss["expectedSeq"] == -1):
+            loss['expectedSeq'] = seq + 1
+            return
+
+        #print(f'expected: {loss["expectedSeq"]}')
+        #loss['expectedSeq'] += 1
+
+        
 
         if (seq == loss['expectedSeq']):
             loss['expectedSeq'] += 1
 
         else:
             while (loss['expectedSeq'] != seq):
+                #print(f'seq: {seq}, expected: {loss["expectedSeq"]}')
+
                 loss['count'] += 1
                 loss['expectedSeq'] += 1 
+
+
+            loss['expectedSeq'] += 1 
+
+        #print(loss['count'], loss['total'] + loss['count'])
+        #print()
+
+
+
+        
 
     def get_seq(self, packet):
         seq = -1
@@ -217,7 +248,7 @@ class ProcessPacket:
             plen = self.data[key]['len']
             media, state = self._detect_media(plen['max_len'], pps['max_pps'], plen['avg_5'], pps['count'], plen['std'], pps['std'])
             if (state != 'inactive'):
-                print(media_info)
+                #print(media_info)
                 media_info[media] += 1
                 media_info['media'] = self.calculate_media(media_info)
 
@@ -315,34 +346,34 @@ class ProcessPacket:
     def _detect_media(self, max_len, max_bps, curr_len, curr_bps, std_len, std_bps):
 
 
-        if (max_len < 700 and curr_bps < 70 and curr_bps > 20):
-            print(f'Audio: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}')
+        if (max_len < 700 and curr_bps < 70 and curr_bps > 10):
+            #print(f'Audio: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}')
 
             return 'audio', 'active'
 
 
         if (max_len > 800 and curr_bps > 3 and curr_bps < 30 and std_bps< 10):
-            print(f'Video min: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}')
+            #print(f'Video min: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}')
 
             return 'video', 'video_minimised'
         
         if (max_len > 800 and std_bps < 50 and curr_bps > 3):
-            print(f'Video max: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}')
+            #print(f'Video max: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}')
 
             return 'video', 'video_maximised'
 
         if (max_len > 800 and std_bps > 10):
-            print(f'content: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}')
+            #print(f'content: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}')
             return 'content', 'content_active'
 
         if (curr_bps < 5 and curr_len > 120):
-            print(f'Content: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}, curr_len: {curr_len}')
+            #print(f'Content: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}, curr_len: {curr_len}')
             return 'content', 'content_still'
 
         if (curr_bps < 5 and curr_len < 120):
             return  'unknown', 'inactive'
 
-        print(f'UNKOWN: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}, curr len: {curr_len}')
+        #print(f'UNKOWN: max_len: {max_len}, curr pps: {curr_bps}, std pps: {std_bps}, curr len: {curr_len}')
 
         return 'unknown', 'unknown'
 
@@ -362,22 +393,33 @@ class ProcessPacket:
                 #data_fg[key]['pps'] = data_fg[key]['pps'] * 2  #if speed is every 0.5sec
                 info = self.flows[key]
                 if (info['protocol'] == 'UDP'):
+                    loss = data_fg[key]['loss']
+                    if (loss['total'] != 0):
+                        loss_pc = round(loss['count']/(loss['total'] + loss['count']), 2) * 100
+                    else:
+                        loss_pc = 0
+
+                    #print('setting packt loss: ', loss['count'], loss['total'], info['dstport'])
+
+                    
                     to_send[key] = {
                         'info' : info,
                         'data' : {
                             'pps' : data_fg[key]['pps']['count'],
                             'jitter': data_fg[key]['jitter']['avg'],
-                            'loss'  : data_fg[key]['loss']['count'],
+                            'loss'  : loss_pc,
                             'media' : data_fg[key]['media']['media'],
                             'state' : data_fg[key]['media']['state'],
                             'len' : data_fg[key]['len']['avg'],
-                            'mbps': (data_fg[key]['mbps']['count'])/1000,
+                            'mbps': (data_fg[key]['mbps']['count'] * 8)/1000000,
                         }
                     }
 
                     self.data[key]['jitter']['all_delay'] = []
                     self.data[key]['jitter']['avg'] = 0
                     self.data[key]['loss']['count'] = 0
+                    self.data[key]['loss']['total'] = 0
+                    #self.data[key]['loss']['expectedSeq'] = -1
                     self.data[key]['len']['arr'] = []
 
 
@@ -397,6 +439,7 @@ class ProcessPacket:
                 self.data[key]['pps']['count'] = 0
                 self.data[key]['mbps']['count'] = 0
                 
+            #print()
 
             return to_send
 
